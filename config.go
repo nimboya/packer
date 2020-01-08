@@ -35,12 +35,49 @@ type config struct {
 	PostProcessors             packer.MapOfPostProcessor `json:"-"`
 }
 
-// decodeConfig decodes configuration in JSON format from the given io.Reader into
-// the config object pointed to.
-func decodeConfig(r io.Reader, c *config) error {
-	decoder := json.NewDecoder(r)
-	err := decoder.Decode(c)
+// LoadFromFile loads configuration details from a Packer configuration file
+func (c *config) LoadFromFile() error {
+	c.PluginMinPort = 10000
+	c.PluginMaxPort = 25000
+	c.Builders = packer.MapOfBuilder{}
+	c.PostProcessors = packer.MapOfPostProcessor{}
+	c.Provisioners = packer.MapOfProvisioner{}
+	if err := c.Discover(); err != nil {
+		return err
+	}
+
+	// start by loading from PACKER_CONFIG if available
+	var configFilePath string
+	if v := os.Getenv("PACKER_CONFIG"); v != "" {
+		log.Printf("'PACKER_CONFIG' set, loading config from environment.")
+		configFilePath = v
+	}
+
+	if configFilePath == "" {
+		var err error
+		configFilePath, err = packer.ConfigFile()
+		if err != nil {
+			log.Printf("Error detecting default config file path: %s", err)
+		}
+	}
+
+	if configFilePath == "" {
+		return nil
+	}
+
+	log.Printf("Attempting to open config file: %s", configFilePath)
+	f, err := os.Open(configFilePath)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+
+		log.Printf("[WARN] Config file doesn't exist: %s", configFilePath)
+		return nil
+	}
+	defer f.Close()
+
+	if err := decodeConfig(f, c); err != nil {
 		return err
 	}
 
@@ -77,6 +114,13 @@ func decodeConfig(r io.Reader, c *config) error {
 	}
 
 	return nil
+}
+
+// decodeConfig decodes configuration in JSON format from the given io.Reader into
+// the config object pointed to.
+func decodeConfig(r io.Reader, c *config) error {
+	decoder := json.NewDecoder(r)
+	return decoder.Decode(c)
 }
 
 // Discover discovers plugins.

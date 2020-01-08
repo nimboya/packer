@@ -9,8 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/hashicorp/packer/packer"
 )
 
 func TestDecodeConfig_basic(t *testing.T) {
@@ -20,7 +18,10 @@ func TestDecodeConfig_basic(t *testing.T) {
 		"PluginMinPort": 10,
 		"PluginMaxPort": 25,
 		"disable_checkpoint": true,
-		"disable_checkpoint_signature": true
+		"disable_checkpoint_signature": true,
+		"builders": { "cloud-xyz": "packer-builder-cloud-xyz" },
+		"provisioners": { "super-shell": "packer-builder-super-shell" },
+		"post-processors": { "noop": "packer-post-processor-noop" }
 	}`
 
 	var cfg config
@@ -37,59 +38,94 @@ func TestDecodeConfig_basic(t *testing.T) {
 
 }
 
-func TestDecodeConfig_plugins(t *testing.T) {
+func TestLoadFromFile(t *testing.T) {
+	configFilePath, err := generateFakePackerConfigData()
+	if err != nil {
+		t.Fatalf("error encountered while creating fake Packer configuration data %v", err)
+	}
+	defer destroyFakePackerConfigData(filepath.Base(configFilePath))
 
+	// Set PACKER_CONFIG to test Packer config
+	os.Setenv("PACKER_CONFIG", configFilePath)
+	var cfg config
+	if err := cfg.LoadFromFile(); err != nil {
+		t.Fatalf("error encountered decoding configuration: %v", err)
+	}
+
+	if !cfg.Builders.Has("cloud-xyz") {
+		t.Errorf("failed to load external builders; got %#v as the resulting config", cfg)
+	}
+
+	if !cfg.Provisioners.Has("super-shell") {
+		t.Errorf("failed to load external provisioners; got %#v as the resulting config", cfg)
+	}
+
+	if !cfg.PostProcessors.Has("noop") {
+		t.Errorf("failed to load external post-processors; got %#v as the resulting config", cfg)
+	}
+}
+
+/* generateFakePackerConfigData creates a collection of mock plugins along with a
+basic packerconfig.  The return string of this function is points to a valid packerconfig
+file that can be used for configuring external plugins.
+
+This function will only clean up if there is an error, on successful runs the caller
+is responsible for cleaning up the data via destroyFakePackerConfigData(packerConfigPath).
+*/
+func generateFakePackerConfigData() (string, error) {
 	dir, err := ioutil.TempDir("", "random-testdata")
 	if err != nil {
-		t.Fatalf("failed to create temporary test directory: %v", err)
+		return "", fmt.Errorf("failed to create temporary test directory: %v", err)
 	}
-	defer os.RemoveAll(dir)
+
+	tmpFile, err := ioutil.TempFile("", "packerconfig")
+	if err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("failed to create temporary test configuration file: %v", err)
+	}
 
 	plugins := [...]string{
-		filepath.Join(dir, "packer-builder-comment"),
-		filepath.Join(dir, "packer-provisioner-comment"),
-		filepath.Join(dir, "packer-post-processor-comment"),
+		filepath.Join(dir, "packer-builder-cloud-xyz"),
+		filepath.Join(dir, "packer-provisioner-super-shell"),
+		filepath.Join(dir, "packer-post-processor-noop"),
 	}
 	for _, plugin := range plugins {
 		_, err := os.Create(plugin)
 		if err != nil {
-			t.Fatalf("failed to create temporary plugin file (%s): %v", plugin, err)
+			os.RemoveAll(dir)
+			return "", fmt.Errorf("failed to create temporary plugin file (%s): %v", plugin, err)
 		}
 	}
 
 	packerConfig := fmt.Sprintf(`
 	{
 		"builders": {
-			"comment": %q
+			"cloud-xyz": %q
 		},
 		"provisioners": {
-			"comment": %q
+			"super-shell": %q
 		},
 		"post-processors": {
-			"comment": %q
+			"noop": %q
 		}
 	}`, plugins[0], plugins[1], plugins[2])
 
-	var cfg config
-	cfg.Builders = packer.MapOfBuilder{}
-	cfg.PostProcessors = packer.MapOfPostProcessor{}
-	cfg.Provisioners = packer.MapOfProvisioner{}
-	err = decodeConfig(strings.NewReader(packerConfig), &cfg)
+	fmt.Println(packerConfig)
 
-	if err != nil {
-		t.Fatalf("error encountered decoding configuration: %v", err)
+	if _, err := tmpFile.Write([]byte(packerConfig)); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("failed to write testdata to packerconfig file: %v", err)
 	}
 
-	if len(cfg.Builders) == 0 || !cfg.Builders.Has("comment") {
-		t.Errorf("decodeConfig failed to load external builders; got %#v as the resulting config", cfg)
+	if err := tmpFile.Close(); err != nil {
+		os.RemoveAll(dir)
+		return "", fmt.Errorf("failed to close packerconfig file: %v", err)
 	}
 
-	if len(cfg.Provisioners) == 0 || !cfg.Provisioners.Has("comment") {
-		t.Errorf("decodeConfig failed to load external provisioners; got %#v as the resulting config", cfg)
-	}
+	return tmpFile.Name(), nil
+}
 
-	if len(cfg.PostProcessors) == 0 || !cfg.PostProcessors.Has("comment") {
-		t.Errorf("decodeConfig failed to load external post-processors; got %#v as the resulting config", cfg)
-	}
-
+// destroyFakePackerConfigData will destroy all data under path
+func destroyFakePackerConfigData(path string) {
+	os.RemoveAll(path)
 }
