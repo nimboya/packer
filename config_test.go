@@ -2,23 +2,29 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/packer/packer"
 )
 
 func TestDecodeConfig_basic(t *testing.T) {
 
 	packerConfig := `
 	{
-		"PluginMinPort": 10001,
-		"PluginMaxPort": 26000,
+		"PluginMinPort": 10,
+		"PluginMaxPort": 25,
 		"disable_checkpoint": true,
 		"disable_checkpoint_signature": true
 	}`
 
 	var cfg config
-	err := DecodeConfig(strings.NewReader(packerConfig), &cfg)
+	err := decodeConfig(strings.NewReader(packerConfig), &cfg)
 	if err != nil {
 		t.Fatalf("error encountered decoding configuration: %v", err)
 	}
@@ -31,24 +37,59 @@ func TestDecodeConfig_basic(t *testing.T) {
 
 }
 
-func TestDecodeConfig_provisioners(t *testing.T) {
+func TestDecodeConfig_plugins(t *testing.T) {
 
-	packerConfig := `
+	dir, err := ioutil.TempDir("", "random-testdata")
+	if err != nil {
+		t.Fatalf("failed to create temporary test directory: %v", err)
+	}
+	defer os.RemoveAll(dir)
+
+	plugins := [...]string{
+		filepath.Join(dir, "packer-builder-comment"),
+		filepath.Join(dir, "packer-provisioner-comment"),
+		filepath.Join(dir, "packer-post-processor-comment"),
+	}
+	for _, plugin := range plugins {
+		_, err := os.Create(plugin)
+		if err != nil {
+			t.Fatalf("failed to create temporary plugin file (%s): %v", plugin, err)
+		}
+	}
+
+	packerConfig := fmt.Sprintf(`
 	{
-			"provisioners": {
-					"comment": "/tmp/packer-provisioner-comment"
-			}
-	}`
+		"builders": {
+			"comment": %q
+		},
+		"provisioners": {
+			"comment": %q
+		},
+		"post-processors": {
+			"comment": %q
+		}
+	}`, plugins[0], plugins[1], plugins[2])
 
 	var cfg config
-	err := DecodeConfig(strings.NewReader(packerConfig), &cfg)
+	cfg.Builders = packer.MapOfBuilder{}
+	cfg.PostProcessors = packer.MapOfPostProcessor{}
+	cfg.Provisioners = packer.MapOfProvisioner{}
+	err = decodeConfig(strings.NewReader(packerConfig), &cfg)
 
 	if err != nil {
 		t.Fatalf("error encountered decoding configuration: %v", err)
 	}
 
-	if _, ok := cfg.Provisioners["comment"]; !ok {
-		t.Errorf("provisioner by the name of comment was not found")
+	if len(cfg.Builders) == 0 || !cfg.Builders.Has("comment") {
+		t.Errorf("decodeConfig failed to load external builders; got %#v as the resulting config", cfg)
+	}
+
+	if len(cfg.Provisioners) == 0 || !cfg.Provisioners.Has("comment") {
+		t.Errorf("decodeConfig failed to load external provisioners; got %#v as the resulting config", cfg)
+	}
+
+	if len(cfg.PostProcessors) == 0 || !cfg.PostProcessors.Has("comment") {
+		t.Errorf("decodeConfig failed to load external post-processors; got %#v as the resulting config", cfg)
 	}
 
 }
