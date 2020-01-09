@@ -290,7 +290,51 @@ func extractMachineReadable(args []string) ([]string, bool) {
 
 func loadConfig() (*config, error) {
 	var config config
-	if err := config.LoadFromFile(); err != nil {
+	config.PluginMinPort = 10000
+	config.PluginMaxPort = 25000
+	config.Builders = packer.MapOfBuilder{}
+	config.PostProcessors = packer.MapOfPostProcessor{}
+	config.Provisioners = packer.MapOfProvisioner{}
+	if err := config.Discover(); err != nil {
+		return nil, err
+	}
+
+	// start by loading from PACKER_CONFIG if available
+	var configFilePath string
+	if v := os.Getenv("PACKER_CONFIG"); v != "" {
+		log.Printf("'PACKER_CONFIG' set, loading config from environment.")
+		configFilePath = v
+	}
+
+	if configFilePath == "" {
+		var err error
+		configFilePath, err = packer.ConfigFile()
+		if err != nil {
+			log.Printf("Error detecting default config file path: %s", err)
+		}
+	}
+
+	if configFilePath == "" {
+		return &config, nil
+	}
+
+	log.Printf("Attempting to open config file: %s", configFilePath)
+	f, err := os.Open(configFilePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+
+		log.Printf("[WARN] Config file doesn't exist: %s", configFilePath)
+		return &config, nil
+	}
+	defer f.Close()
+
+	if err := decodeConfig(f, &config); err != nil {
+		return nil, err
+	}
+
+	if err := config.loadExternalComponentsFromConfig(); err != nil {
 		return nil, err
 	}
 

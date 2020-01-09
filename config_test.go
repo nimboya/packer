@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/hashicorp/packer/packer"
 )
 
 func TestDecodeConfig_basic(t *testing.T) {
@@ -18,10 +20,7 @@ func TestDecodeConfig_basic(t *testing.T) {
 		"PluginMinPort": 10,
 		"PluginMaxPort": 25,
 		"disable_checkpoint": true,
-		"disable_checkpoint_signature": true,
-		"builders": { "cloud-xyz": "packer-builder-cloud-xyz" },
-		"provisioners": { "super-shell": "packer-builder-super-shell" },
-		"post-processors": { "noop": "packer-post-processor-noop" }
+		"disable_checkpoint_signature": true
 	}`
 
 	var cfg config
@@ -38,18 +37,24 @@ func TestDecodeConfig_basic(t *testing.T) {
 
 }
 
-func TestLoadFromFile(t *testing.T) {
-	configFilePath, err := generateFakePackerConfigData()
+func TestLoadExternalComponentsFromConfig(t *testing.T) {
+	packerConfigData, cleanUpFunc, err := generateFakePackerConfigData()
 	if err != nil {
 		t.Fatalf("error encountered while creating fake Packer configuration data %v", err)
 	}
-	defer destroyFakePackerConfigData(filepath.Base(configFilePath))
+	defer cleanUpFunc()
 
-	// Set PACKER_CONFIG to test Packer config
-	os.Setenv("PACKER_CONFIG", configFilePath)
 	var cfg config
-	if err := cfg.LoadFromFile(); err != nil {
+	cfg.Builders = packer.MapOfBuilder{}
+	cfg.PostProcessors = packer.MapOfPostProcessor{}
+	cfg.Provisioners = packer.MapOfProvisioner{}
+
+	if err := decodeConfig(strings.NewReader(packerConfigData), &cfg); err != nil {
 		t.Fatalf("error encountered decoding configuration: %v", err)
+	}
+
+	if err := cfg.loadExternalComponentsFromConfig(); err != nil {
+		t.Fatalf("error encountered discovering external components from configuration file: %v", err)
 	}
 
 	if !cfg.Builders.Has("cloud-xyz") {
@@ -65,23 +70,21 @@ func TestLoadFromFile(t *testing.T) {
 	}
 }
 
-/* generateFakePackerConfigData creates a collection of mock plugins along with a
-basic packerconfig.  The return string of this function is points to a valid packerconfig
-file that can be used for configuring external plugins.
+/* generateFakePackerConfigData creates a collection of mock plugins along with a basic packerconfig.
+The return packerConfigData is a valid packerconfig file that can be used for configuring external plugins,
+cleanUpFunc is a function that should be called for cleaning up any generated mock data.
 
 This function will only clean up if there is an error, on successful runs the caller
-is responsible for cleaning up the data via destroyFakePackerConfigData(packerConfigPath).
+is responsible for cleaning up the data via defer cleanUpFunc().
 */
-func generateFakePackerConfigData() (string, error) {
+func generateFakePackerConfigData() (packerConfigData string, cleanUpFunc func(), err error) {
 	dir, err := ioutil.TempDir("", "random-testdata")
 	if err != nil {
-		return "", fmt.Errorf("failed to create temporary test directory: %v", err)
+		return "", nil, fmt.Errorf("failed to create temporary test directory: %v", err)
 	}
 
-	tmpFile, err := ioutil.TempFile("", "packerconfig")
-	if err != nil {
+	cleanUpFunc = func() {
 		os.RemoveAll(dir)
-		return "", fmt.Errorf("failed to create temporary test configuration file: %v", err)
 	}
 
 	plugins := [...]string{
@@ -92,13 +95,17 @@ func generateFakePackerConfigData() (string, error) {
 	for _, plugin := range plugins {
 		_, err := os.Create(plugin)
 		if err != nil {
-			os.RemoveAll(dir)
-			return "", fmt.Errorf("failed to create temporary plugin file (%s): %v", plugin, err)
+			cleanUpFunc()
+			return "", nil, fmt.Errorf("failed to create temporary plugin file (%s): %v", plugin, err)
 		}
 	}
 
-	packerConfig := fmt.Sprintf(`
+	packerConfigData = fmt.Sprintf(`
 	{
+		"PluginMinPort": 10,
+		"PluginMaxPort": 25,
+		"disable_checkpoint": true,
+		"disable_checkpoint_signature": true,
 		"builders": {
 			"cloud-xyz": %q
 		},
@@ -110,22 +117,5 @@ func generateFakePackerConfigData() (string, error) {
 		}
 	}`, plugins[0], plugins[1], plugins[2])
 
-	fmt.Println(packerConfig)
-
-	if _, err := tmpFile.Write([]byte(packerConfig)); err != nil {
-		os.RemoveAll(dir)
-		return "", fmt.Errorf("failed to write testdata to packerconfig file: %v", err)
-	}
-
-	if err := tmpFile.Close(); err != nil {
-		os.RemoveAll(dir)
-		return "", fmt.Errorf("failed to close packerconfig file: %v", err)
-	}
-
-	return tmpFile.Name(), nil
-}
-
-// destroyFakePackerConfigData will destroy all data under path
-func destroyFakePackerConfigData(path string) {
-	os.RemoveAll(path)
+	return
 }
