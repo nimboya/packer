@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -87,10 +88,15 @@ func generateFakePackerConfigData() (packerConfigData string, cleanUpFunc func()
 		os.RemoveAll(dir)
 	}
 
+	var suffix string
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+
 	plugins := [...]string{
-		filepath.Join(dir, "packer-builder-cloud-xyz"),
-		filepath.Join(dir, "packer-provisioner-super-shell"),
-		filepath.Join(dir, "packer-post-processor-noop"),
+		filepath.Join(dir, "packer-builder-cloud-xyz"+suffix),
+		filepath.Join(dir, "packer-provisioner-super-shell"+suffix),
+		filepath.Join(dir, "packer-post-processor-noop"+suffix),
 	}
 	for _, plugin := range plugins {
 		_, err := os.Create(plugin)
